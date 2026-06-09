@@ -328,6 +328,14 @@ socket.on('partita_finita', ({ risultati, vincitore }) => {
   showEndModal(risultati, vincitore);
 });
 
+socket.on('briscola_presa', ({ token, nome, briscola }) => {
+  const chi = token === myToken ? 'Hai preso' : `${nome} prende`;
+  showToast(`🃏 ${chi} la briscola! (${briscola.valore} di ${briscola.seme})`, 3500);
+  // Nascondi la briscola dal tavolo
+  const slot = document.getElementById('briscola-slot');
+  if (slot) slot.style.opacity = '0.25';
+});
+
 socket.on('giocatore_disconnesso', ({ msg }) => {
   // Mostra messaggio ma non interrompere la partita — potrebbe riconnettersi
   showToast('⚠ ' + msg, 4000);
