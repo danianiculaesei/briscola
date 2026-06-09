@@ -100,7 +100,9 @@
       <div class="mazzo-slot">
         <div class="slot-label">Mazzo</div>
         <div class="mazzo-visual" id="mazzo-visual">
-          <div class="carta carta-retro mazzo-carta"></div>
+          <div class="carta-img retro mazzo-carta">
+            <img src="carte/retro.png" alt="retro" draggable="false">
+          </div>
         </div>
         <div class="mazzo-count" id="mazzo-count">— carte</div>
       </div>
@@ -345,27 +347,24 @@ socket.on('giocatore_disconnesso', ({ msg }) => {
 // ══════════════════════════════════════════════
 
 function makeCarta(carta, extraClass = '') {
-  const pts   = PUNTI_VALORE[carta.valore];
-  const sym   = SEME_SYM[carta.seme];
-  const nomeV = NOME_VALORE[carta.valore];
-  const semeI = SEMI_IT[carta.seme];
-  const col   = COLORE_SEME[carta.seme];
-  const el    = document.createElement('div');
-  el.className = `carta ${extraClass}`;
-  el.style.setProperty('--suit-color', col);
+  const pts = PUNTI_VALORE[carta.valore];
+  const el  = document.createElement('div');
+  el.className = `carta-img ${extraClass}`;
   el.innerHTML = `
-    <div class="c-corner c-tl"><span class="c-val">${carta.valore}</span><span class="c-sym">${sym}</span></div>
-    <div class="c-center"><span class="c-sym-big">${sym}</span></div>
-    <div class="c-corner c-br"><span class="c-val">${carta.valore}</span><span class="c-sym">${sym}</span></div>
-    ${pts > 0 ? `<div class="c-pts">${pts}pt</div>` : ''}
-    <div class="c-name">${nomeV} di ${semeI}</div>
+    <img src="carte/${carta.valore}_${carta.seme}.png" alt="${carta.valore} di ${carta.seme}" draggable="false">
+    <div class="c-overlay-tl">
+      ${carta.valore}
+      ${pts > 0 ? `<span class="c-pts-badge">${pts}</span>` : ''}
+    </div>
+    <div class="c-overlay-br">${carta.valore}</div>
   `;
   return el;
 }
 
 function makeRetro() {
   const el = document.createElement('div');
-  el.className = 'carta carta-retro';
+  el.className = 'carta-img retro';
+  el.innerHTML = `<img src="carte/retro.png" alt="retro" draggable="false">`;
   return el;
 }
 
