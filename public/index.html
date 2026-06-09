@@ -100,7 +100,7 @@
       <div class="mazzo-slot">
         <div class="slot-label">Mazzo</div>
         <div class="mazzo-visual" id="mazzo-visual">
-          <div class="carta-svg-wrap retro mazzo-carta"></div>
+          <div class="carta carta-retro mazzo-carta"></div>
         </div>
         <div class="mazzo-count" id="mazzo-count">— carte</div>
       </div>
@@ -139,7 +139,6 @@
 </div>
 
 <script src="/socket.io/socket.io.js"></script>
-<script src="carte.js"></script>
 <script>
 
 // ══════════════════════════════════════════════
@@ -345,25 +344,36 @@ socket.on('giocatore_disconnesso', ({ msg }) => {
 // RENDER — usa SVG da carte.js
 // ══════════════════════════════════════════════
 
-function svgCarta(carta, extraClass = '') {
-  const el = document.createElement('div');
-  el.className = `carta-svg-wrap ${extraClass}`;
-  el.innerHTML = getSVGCarta(carta);
+function makeCarta(carta, extraClass = '') {
+  const pts   = PUNTI_VALORE[carta.valore];
+  const sym   = SEME_SYM[carta.seme];
+  const nomeV = NOME_VALORE[carta.valore];
+  const semeI = SEMI_IT[carta.seme];
+  const col   = COLORE_SEME[carta.seme];
+  const el    = document.createElement('div');
+  el.className = `carta ${extraClass}`;
+  el.style.setProperty('--suit-color', col);
+  el.innerHTML = `
+    <div class="c-corner c-tl"><span class="c-val">${carta.valore}</span><span class="c-sym">${sym}</span></div>
+    <div class="c-center"><span class="c-sym-big">${sym}</span></div>
+    <div class="c-corner c-br"><span class="c-val">${carta.valore}</span><span class="c-sym">${sym}</span></div>
+    ${pts > 0 ? `<div class="c-pts">${pts}pt</div>` : ''}
+    <div class="c-name">${nomeV} di ${semeI}</div>
+  `;
   return el;
 }
 
-function svgRetro() {
+function makeRetro() {
   const el = document.createElement('div');
-  el.className = 'carta-svg-wrap retro';
-  el.innerHTML = SVG_RETRO;
+  el.className = 'carta carta-retro';
   return el;
 }
 
 function renderBriscola(briscola) {
   const slot = document.getElementById('briscola-slot');
   slot.innerHTML = '<div class="slot-label">Briscola</div>';
-  const wrap = svgCarta(briscola, 'briscola-card');
-  slot.appendChild(wrap);
+  const c = makeCarta(briscola, 'briscola-card');
+  slot.appendChild(c);
 }
 
 function renderOpponents(giocatori) {
@@ -373,14 +383,12 @@ function renderOpponents(giocatori) {
     const div = document.createElement('div');
     div.className = 'opponent-slot';
     div.id = `opp-slot-${g.token}`;
-
     const handDiv = document.createElement('div');
     handDiv.className = 'opp-hand';
     handDiv.id = `hand-${g.token}`;
-    handDiv.appendChild(svgRetro());
-    handDiv.appendChild(svgRetro());
-    handDiv.appendChild(svgRetro());
-
+    handDiv.appendChild(makeRetro());
+    handDiv.appendChild(makeRetro());
+    handDiv.appendChild(makeRetro());
     div.innerHTML = `
       <div class="opp-avatar">${g.nome[0].toUpperCase()}</div>
       <div class="opp-info">
@@ -397,7 +405,7 @@ function renderMyHand() {
   const container = document.getElementById('my-hand');
   container.innerHTML = '';
   myMano.forEach(carta => {
-    const el = svgCarta(carta, 'mia-carta' + (mioTurno ? ' giocabile' : ''));
+    const el = makeCarta(carta, 'mia-carta' + (mioTurno ? ' giocabile' : ''));
     if (mioTurno) el.onclick = () => giocaCarta(carta, el);
     container.appendChild(el);
   });
@@ -415,7 +423,7 @@ function renderPlayedCards(carteGiocate) {
     label.className = 'played-player-name';
     label.textContent = cg.token === myToken ? 'Tu' : nome;
     wrap.appendChild(label);
-    wrap.appendChild(svgCarta(cg.carta, 'played'));
+    wrap.appendChild(makeCarta(cg.carta, 'played'));
     container.appendChild(wrap);
   });
 }
