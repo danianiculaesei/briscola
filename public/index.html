@@ -178,10 +178,10 @@
 
     // ── PARTITA INIZIATA → redirect ──
     socket.on('partita_iniziata', (data) => {
+      const nome = document.getElementById('nome-input').value.trim();
       sessionStorage.setItem('briscola_game', JSON.stringify({
-        ...data,
-        socketId: socket.id,
-        roomId: myRoomId || document.getElementById('room-code-display').textContent,
+        myNome:  nome,
+        roomId:  myRoomId || document.getElementById('room-code-display').textContent,
       }));
       window.location.href = 'game.html';
     });
