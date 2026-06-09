@@ -6,7 +6,11 @@ const crypto     = require('crypto');
 
 const app    = express();
 const server = http.createServer(app);
-const io     = new Server(server, { cors: { origin: '*' } });
+const io     = new Server(server, {
+  cors: { origin: '*' },
+  pingTimeout:  60000,   // 60s prima di considerare disconnesso
+  pingInterval: 25000,   // ping ogni 25s per tenere viva la connessione
+});
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/', (_, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
