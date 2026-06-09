@@ -166,16 +166,41 @@ io.on('connection', socket => {
     game.semePartenza = null;
     game.turnoDi      = wTok;
 
-    // Pesca
-    const si = game.giocatori.findIndex(g=>g.token===wTok);
-    for (let i=0; i<nG; i++) {
-      const g = game.giocatori[(si+i)%nG];
-      if (game.mazzo.length > 0) {
-        const nuova = game.mazzo.pop();
-        game.mani[g.token].push(nuova);
+    // ── PESCA ──────────────────────────────────────────
+    // Ordine: vincitore prima, poi gli altri in sequenza
+    const si = game.giocatori.findIndex(g => g.token === wTok);
+    const ordinePesca = Array.from({length: nG}, (_, i) => game.giocatori[(si + i) % nG]);
+
+    // Quante carte normali rimangono (esclusa la briscola in pos 0)
+    const carteNormali = game.mazzo.length - 1; // mazzo[0] è la briscola
+
+    for (let i = 0; i < ordinePesca.length; i++) {
+      const g = ordinePesca[i];
+      let cartaPescata = null;
+
+      if (carteNormali > 0 && i < carteNormali) {
+        // Pesca carta normale (pop() toglie dall'ultimo = carte normali)
+        cartaPescata = game.mazzo.pop();
+        game.mani[g.token].push(cartaPescata);
+      } else if (game.mazzo.length === 1) {
+        // Ultima carta = briscola → va all'ultimo giocatore dell'ordine di pesca
+        // La briscola va a chi pesca per ultimo (i === nG - 1)
+        if (i === ordinePesca.length - 1) {
+          cartaPescata = game.mazzo.pop(); // prende la briscola
+          game.mani[g.token].push(cartaPescata);
+          // Avvisa tutti che la briscola è stata presa
+          io.to(socket.roomId).emit('briscola_presa', {
+            token:   g.token,
+            nome:    g.nome,
+            briscola: cartaPescata,
+          });
+        }
+        // Gli altri giocatori con i < nG-1 ma carteNormali === 0 non pescano
       }
-      // Manda mano aggiornata solo al proprietario
-      const sock = [...io.sockets.sockets.values()].find(s=>s.token===g.token);
+      // Se mazzo vuoto: nessuno pesca
+
+      // Manda mano aggiornata al proprietario
+      const sock = [...io.sockets.sockets.values()].find(s => s.token === g.token);
       if (sock) sock.emit('aggiornamento_mano', {
         mano:           game.mani[g.token],
         mazzoRimanente: game.mazzo.length,
@@ -183,7 +208,7 @@ io.on('connection', socket => {
       });
     }
 
-    const tutteVuote = game.giocatori.every(g=>(game.mani[g.token]||[]).length===0);
+    const tutteVuote = game.giocatori.every(g => (game.mani[g.token] || []).length === 0);
     if (tutteVuote) finePartita(socket.roomId);
     else io.to(socket.roomId).emit('turno', { token: game.turnoDi });
   });
