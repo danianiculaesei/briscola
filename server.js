@@ -1,12 +1,11 @@
 // ══════════════════════════════════════════════════════
 // server.js — Briscola Multiplayer
-// Node.js + Socket.io
 // ══════════════════════════════════════════════════════
 
-const express   = require('express');
-const http      = require('http');
+const express    = require('express');
+const http       = require('http');
 const { Server } = require('socket.io');
-const path      = require('path');
+const path       = require('path');
 
 const app    = express();
 const server = http.createServer(app);
@@ -18,30 +17,25 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
-// ── COSTANTI ───────────────────────────────────────────
+
+// ── COSTANTI ──────────────────────────────────────────
 
 const SEMI   = ['bastoni', 'coppe', 'denari', 'spade'];
 const VALORI = ['2', '4', '5', '6', '7', 'J', 'Q', 'K', '3', 'A'];
+const FORZA  = { '2':0,'4':1,'5':2,'6':3,'7':4,'J':5,'Q':6,'K':7,'3':8,'A':9 };
+const PUNTI  = { 'A':11,'3':10,'K':4,'Q':3,'J':2,'7':0,'6':0,'5':0,'4':0,'2':0 };
 
-// Ordine di forza (0 = più debole, 9 = più forte)
-const FORZA = { '2':0, '4':1, '5':2, '6':3, '7':4, 'J':5, 'Q':6, 'K':7, '3':8, 'A':9 };
+const rooms = {}; // roomId → stanza
 
-// Punti per carta
-const PUNTI = { 'A':11, '3':10, 'K':4, 'Q':3, 'J':2, '7':0, '6':0, '5':0, '4':0, '2':0 };
-
-// Stanze attive: roomId → GameState
-const rooms = {};
-
-// ── CREAZIONE MAZZO ────────────────────────────────────
+// ── MAZZO ─────────────────────────────────────────────
 
 function creaMazzo() {
   const mazzo = [];
-  for (const seme of SEMI) {
-    for (const valore of VALORI) {
+  for (const seme of SEMI)
+    for (const valore of VALORI)
       mazzo.push({ seme, valore, punti: PUNTI[valore] });
-    }
-  }
-  // Fisher-Yates shuffle
+
+  // Fisher-Yates
   for (let i = mazzo.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [mazzo[i], mazzo[j]] = [mazzo[j], mazzo[i]];
@@ -49,145 +43,161 @@ function creaMazzo() {
   return mazzo;
 }
 
-// ── LOGICA PRESA ───────────────────────────────────────
+// ── VINCITORE MANO ────────────────────────────────────
 
-/**
- * Determina l'indice del vincitore tra le carte giocate.
- * @param {Array} carteGiocate  [{socketId, carta}, ...]
- * @param {string} semePartenza seme della prima carta
- * @param {string} briscola     seme di briscola
- */
 function calcolaVincitore(carteGiocate, semePartenza, briscola) {
   let bestIdx = 0;
   let best    = carteGiocate[0];
 
   for (let i = 1; i < carteGiocate.length; i++) {
-    const curr = carteGiocate[i];
+    const curr          = carteGiocate[i];
     const bestIsBriscola = best.carta.seme === briscola;
     const currIsBriscola = curr.carta.seme === briscola;
 
     if (currIsBriscola && !bestIsBriscola) {
-      // briscola batte tutto il resto
       best = curr; bestIdx = i;
     } else if (currIsBriscola && bestIsBriscola) {
-      // entrambe briscola: vince la più forte
-      if (FORZA[curr.carta.valore] > FORZA[best.carta.valore]) {
-        best = curr; bestIdx = i;
-      }
+      if (FORZA[curr.carta.valore] > FORZA[best.carta.valore]) { best = curr; bestIdx = i; }
     } else if (!bestIsBriscola) {
-      // nessuna briscola: vince la più forte del seme di partenza
       if (curr.carta.seme === semePartenza &&
-          FORZA[curr.carta.valore] > FORZA[best.carta.valore]) {
-        best = curr; bestIdx = i;
-      }
+          FORZA[curr.carta.valore] > FORZA[best.carta.valore]) { best = curr; bestIdx = i; }
     }
   }
   return bestIdx;
 }
 
-// ── STATO INIZIALE PARTITA ─────────────────────────────
+// ── NUOVA PARTITA ─────────────────────────────────────
 
 function nuovaPartita(giocatori) {
   const mazzo    = creaMazzo();
-  const briscola = mazzo[mazzo.length - 1]; // ultima carta = briscola
+  const briscola = mazzo[mazzo.length - 1]; // ultima carta sotto il mazzo
 
-  // Distribuisce 3 carte a testa (in senso antiorario = ordine array)
   const mani = {};
-  for (const g of giocatori) {
+  for (const g of giocatori)
     mani[g.id] = [mazzo.pop(), mazzo.pop(), mazzo.pop()];
-  }
+
+  const punteggi = {}, prese = {};
+  for (const g of giocatori) { punteggi[g.id] = 0; prese[g.id] = []; }
 
   return {
-    giocatori,                // [{id, nome}]
-    mani,                     // { socketId: [carta, ...] }
-    mazzo,                    // carte rimanenti
-    briscola,                 // carta di briscola
-    turnoDi: giocatori[0].id, // chi gioca per primo
-    carteGiocate: [],         // [{socketId, carta}] nella mano corrente
+    giocatori, mani, mazzo, briscola,
+    turnoDi:      giocatori[0].id,
+    carteGiocate: [],
     semePartenza: null,
-    prese: {},                // { socketId: [carte prese] }
-    punteggi: {},             // { socketId: punti }
-    faseFinale: false,        // true quando il mazzo è finito
+    punteggi, prese,
     partitaFinita: false,
   };
 }
 
-// ── SOCKET.IO ──────────────────────────────────────────
+// ── SOCKET ────────────────────────────────────────────
 
 io.on('connection', (socket) => {
+  console.log(`[+] Connected: ${socket.id}`);
 
   // ── CREA STANZA ──
   socket.on('crea_stanza', ({ nome, maxGiocatori }) => {
     const roomId = Math.random().toString(36).slice(2, 7).toUpperCase();
     rooms[roomId] = {
-      id:           roomId,
+      id: roomId,
       maxGiocatori: maxGiocatori || 2,
-      giocatori:    [{ id: socket.id, nome }],
-      stato:        'attesa',  // 'attesa' | 'in_gioco' | 'finita'
-      game:         null,
+      giocatori: [{ id: socket.id, nome }],
+      stato: 'attesa',
+      game:  null,
     };
     socket.join(roomId);
-    socket.roomId = roomId;
+    socket.roomId  = roomId;
+    socket.myNome  = nome;
 
-    socket.emit('stanza_creata', {
-      roomId,
-      giocatori: rooms[roomId].giocatori,
-    });
-    console.log(`[${roomId}] Stanza creata da ${nome}`);
+    socket.emit('stanza_creata', { roomId, giocatori: rooms[roomId].giocatori });
+    console.log(`[${roomId}] Creata da ${nome}`);
   });
 
   // ── ENTRA IN STANZA ──
   socket.on('entra_stanza', ({ nome, roomId }) => {
     const stanza = rooms[roomId];
-
-    if (!stanza) {
-      socket.emit('errore', { msg: 'Stanza non trovata.' }); return;
-    }
-    if (stanza.stato !== 'attesa') {
-      socket.emit('errore', { msg: 'Partita già iniziata.' }); return;
-    }
-    if (stanza.giocatori.length >= stanza.maxGiocatori) {
-      socket.emit('errore', { msg: 'Stanza piena.' }); return;
-    }
+    if (!stanza)                                       { socket.emit('errore', { msg: 'Stanza non trovata.' }); return; }
+    if (stanza.stato !== 'attesa')                     { socket.emit('errore', { msg: 'Partita già iniziata.' }); return; }
+    if (stanza.giocatori.length >= stanza.maxGiocatori){ socket.emit('errore', { msg: 'Stanza piena.' }); return; }
 
     stanza.giocatori.push({ id: socket.id, nome });
     socket.join(roomId);
     socket.roomId = roomId;
+    socket.myNome = nome;
 
     io.to(roomId).emit('aggiornamento_lobby', { giocatori: stanza.giocatori });
-    console.log(`[${roomId}] ${nome} è entrato`);
+    console.log(`[${roomId}] ${nome} entrato`);
 
-    // Avvia automaticamente quando la stanza è piena
-    if (stanza.giocatori.length === stanza.maxGiocatori) {
+    if (stanza.giocatori.length === stanza.maxGiocatori)
       avviaPartita(roomId);
+  });
+
+  // ── RICONNESSIONE (da game.html con nuovo socketId) ──
+  socket.on('riconnetti', ({ nome, roomId }) => {
+    const stanza = rooms[roomId];
+    if (!stanza || !stanza.game) {
+      socket.emit('errore', { msg: 'Partita non trovata.' }); return;
     }
+
+    const game = stanza.game;
+    const vecchio = game.giocatori.find(g => g.nome === nome);
+    if (!vecchio) { socket.emit('errore', { msg: 'Giocatore non trovato.' }); return; }
+
+    const oldId = vecchio.id;
+
+    // Aggiorna ID ovunque
+    vecchio.id = socket.id;
+    if (game.mani[oldId])     { game.mani[socket.id]     = game.mani[oldId];     delete game.mani[oldId]; }
+    if (game.punteggi[oldId] !== undefined) { game.punteggi[socket.id] = game.punteggi[oldId]; delete game.punteggi[oldId]; }
+    if (game.prese[oldId])    { game.prese[socket.id]    = game.prese[oldId];    delete game.prese[oldId]; }
+    if (game.turnoDi === oldId) game.turnoDi = socket.id;
+    game.carteGiocate = game.carteGiocate.map(cg =>
+      cg.socketId === oldId ? { ...cg, socketId: socket.id } : cg
+    );
+
+    // Aggiorna stanza
+    const sg = stanza.giocatori.find(g => g.nome === nome);
+    if (sg) sg.id = socket.id;
+
+    socket.join(roomId);
+    socket.roomId = roomId;
+    socket.myNome = nome;
+
+    console.log(`[${roomId}] ${nome} riconnesso (${oldId} → ${socket.id})`);
+
+    // Rimanda lo stato completo al giocatore
+    socket.emit('partita_ripresa', {
+      giocatori:      game.giocatori,
+      mano:           game.mani[socket.id],
+      briscola:       game.briscola,
+      turnoDi:        game.turnoDi,
+      carteGiocate:   game.carteGiocate,
+      semePartenza:   game.semePartenza,
+      punteggi:       game.punteggi,
+      mazzoRimanente: game.mazzo.length,
+    });
   });
 
   // ── GIOCA CARTA ──
   socket.on('gioca_carta', ({ carta }) => {
     const roomId = socket.roomId;
     const stanza = rooms[roomId];
-    if (!stanza || !stanza.game) return;
+    if (!stanza || !stanza.game) { socket.emit('errore', { msg: 'Partita non attiva.' }); return; }
 
     const game = stanza.game;
 
-    // Controlla che sia il turno del giocatore
     if (game.turnoDi !== socket.id) {
       socket.emit('errore', { msg: 'Non è il tuo turno.' }); return;
     }
 
-    // Rimuove la carta dalla mano
     const mano = game.mani[socket.id];
-    const idx  = mano.findIndex(c => c.seme === carta.seme && c.valore === carta.valore);
-    if (idx === -1) {
-      socket.emit('errore', { msg: 'Carta non in mano.' }); return;
-    }
+    if (!mano) { socket.emit('errore', { msg: 'Mano non trovata.' }); return; }
+
+    const idx = mano.findIndex(c => c.seme === carta.seme && c.valore === carta.valore);
+    if (idx === -1) { socket.emit('errore', { msg: 'Carta non in mano.' }); return; }
+
     mano.splice(idx, 1);
 
-    // Registra la carta giocata
-    if (game.carteGiocate.length === 0) {
-      game.semePartenza = carta.seme;
-    }
+    if (game.carteGiocate.length === 0) game.semePartenza = carta.seme;
     game.carteGiocate.push({ socketId: socket.id, carta });
 
     io.to(roomId).emit('carta_giocata', {
@@ -196,11 +206,12 @@ io.on('connection', (socket) => {
       carteGiocate: game.carteGiocate,
     });
 
-    // Passa il turno al prossimo giocatore
     const nGioc = game.giocatori.length;
+
+    // Non tutte le carte ancora giocate → passa il turno
     if (game.carteGiocate.length < nGioc) {
-      const currIdx  = game.giocatori.findIndex(g => g.id === game.turnoDi);
-      game.turnoDi   = game.giocatori[(currIdx + 1) % nGioc].id;
+      const currIdx = game.giocatori.findIndex(g => g.id === game.turnoDi);
+      game.turnoDi  = game.giocatori[(currIdx + 1) % nGioc].id;
       io.to(roomId).emit('turno', { socketId: game.turnoDi });
       return;
     }
@@ -209,60 +220,39 @@ io.on('connection', (socket) => {
     const winIdx    = calcolaVincitore(game.carteGiocate, game.semePartenza, game.briscola.seme);
     const vincitore = game.carteGiocate[winIdx].socketId;
 
-    // Accumula prese e punti
-    if (!game.prese[vincitore])    game.prese[vincitore]    = [];
-    if (!game.punteggi[vincitore]) game.punteggi[vincitore] = 0;
-
     for (const cg of game.carteGiocate) {
       game.prese[vincitore].push(cg.carta);
-      game.punteggi[vincitore] += cg.carta.punti;
+      game.punteggi[vincitore] = (game.punteggi[vincitore] || 0) + cg.carta.punti;
     }
 
     io.to(roomId).emit('fine_mano', {
       vincitore,
       carteGiocate: game.carteGiocate,
-      punteggi: game.punteggi,
+      punteggi:     game.punteggi,
     });
 
-    // Resetta per la prossima mano
     game.carteGiocate = [];
     game.semePartenza = null;
     game.turnoDi      = vincitore;
 
-    // Pesca (vincitore prima, poi gli altri in ordine)
-    const ordine = [];
-    ordine.push(vincitore);
+    // Pesca: vincitore prima, poi gli altri in ordine
     const startIdx = game.giocatori.findIndex(g => g.id === vincitore);
-    for (let i = 1; i < nGioc; i++) {
-      ordine.push(game.giocatori[(startIdx + i) % nGioc].id);
-    }
-
-    const pescate = {};
-    for (const pid of ordine) {
+    for (let i = 0; i < nGioc; i++) {
+      const pid = game.giocatori[(startIdx + i) % nGioc].id;
       if (game.mazzo.length > 0) {
         const nuova = game.mazzo.pop();
         game.mani[pid].push(nuova);
-        pescate[pid] = nuova;
+        io.to(pid).emit('carta_pescata', { carta: nuova });
       }
-    }
-
-    // Comunica le nuove carte (ognuno riceve solo la propria)
-    for (const pid of ordine) {
-      if (pescate[pid]) {
-        io.to(pid).emit('carta_pescata', { carta: pescate[pid] });
-      }
-    }
-
-    // Manda lo stato aggiornato delle mani (solo la propria)
-    for (const g of game.giocatori) {
-      io.to(g.id).emit('aggiornamento_mano', {
-        mano:          game.mani[g.id],
+      io.to(pid).emit('aggiornamento_mano', {
+        mano:           game.mani[pid],
         mazzoRimanente: game.mazzo.length,
+        punteggi:       game.punteggi,
       });
     }
 
-    // Controlla fine partita
-    const tutteVuote = game.giocatori.every(g => game.mani[g.id].length === 0);
+    // Fine partita?
+    const tutteVuote = game.giocatori.every(g => (game.mani[g.id] || []).length === 0);
     if (tutteVuote) {
       finePartita(roomId);
     } else {
@@ -270,79 +260,70 @@ io.on('connection', (socket) => {
     }
   });
 
-  // ── DISCONNESSIONE ──
+  // ── DISCONNECT ──
   socket.on('disconnect', () => {
     const roomId = socket.roomId;
     if (!roomId || !rooms[roomId]) return;
     const stanza = rooms[roomId];
-    stanza.giocatori = stanza.giocatori.filter(g => g.id !== socket.id);
-    if (stanza.giocatori.length === 0) {
-      delete rooms[roomId];
-      console.log(`[${roomId}] Stanza eliminata`);
-    } else {
-      io.to(roomId).emit('giocatore_disconnesso', {
-        giocatori: stanza.giocatori,
-        msg: 'Un giocatore si è disconnesso.',
-      });
+    // Non rimuovere subito il giocatore — potrebbe riconnettersi da game.html
+    // Rimuovi solo se in attesa (non ancora in partita)
+    if (stanza.stato === 'attesa') {
+      stanza.giocatori = stanza.giocatori.filter(g => g.id !== socket.id);
+      if (stanza.giocatori.length === 0) {
+        delete rooms[roomId];
+      } else {
+        io.to(roomId).emit('aggiornamento_lobby', { giocatori: stanza.giocatori });
+      }
     }
+    console.log(`[-] Disconnected: ${socket.id} (${socket.myNome || '?'})`);
   });
 });
 
-// ── FUNZIONI PARTITA ───────────────────────────────────
+// ── AVVIA PARTITA ─────────────────────────────────────
 
 function avviaPartita(roomId) {
   const stanza = rooms[roomId];
   stanza.stato = 'in_gioco';
   stanza.game  = nuovaPartita(stanza.giocatori);
 
-  const game = stanza.game;
-
-  // Inizializza punteggi
-  for (const g of game.giocatori) {
-    game.punteggi[g.id] = 0;
-    game.prese[g.id]    = [];
-  }
-
-  // Invia a ogni giocatore la propria mano + info generali
-  for (const g of game.giocatori) {
+  for (const g of stanza.giocatori) {
     io.to(g.id).emit('partita_iniziata', {
-      giocatori:    game.giocatori,
-      mano:         game.mani[g.id],
-      briscola:     game.briscola,
-      turnoDi:      game.turnoDi,
-      mazzoRimanente: game.mazzo.length,
+      giocatori:      stanza.game.giocatori,
+      mano:           stanza.game.mani[g.id],
+      briscola:       stanza.game.briscola,
+      turnoDi:        stanza.game.turnoDi,
+      carteGiocate:   [],
+      punteggi:       stanza.game.punteggi,
+      mazzoRimanente: stanza.game.mazzo.length,
     });
   }
 
-  console.log(`[${roomId}] Partita iniziata | Briscola: ${game.briscola.valore} di ${game.briscola.seme}`);
+  console.log(`[${roomId}] Partita avviata | Briscola: ${stanza.game.briscola.valore} di ${stanza.game.briscola.seme}`);
 }
+
+// ── FINE PARTITA ──────────────────────────────────────
 
 function finePartita(roomId) {
   const stanza = rooms[roomId];
   const game   = stanza.game;
   stanza.stato = 'finita';
 
-  // Classifica
-  const risultati = game.giocatori.map(g => ({
-    id:     g.id,
-    nome:   g.nome,
-    punti:  game.punteggi[g.id] || 0,
+  const risultati = stanza.giocatori.map(g => ({
+    id:    g.id,
+    nome:  g.nome,
+    punti: game.punteggi[g.id] || 0,
   })).sort((a, b) => b.punti - a.punti);
-
-  const vincitore = risultati[0];
 
   io.to(roomId).emit('partita_finita', {
     risultati,
-    vincitore,
-    briscola: game.briscola,
+    vincitore: risultati[0],
+    briscola:  game.briscola,
   });
 
-  console.log(`[${roomId}] Partita finita | Vince ${vincitore.nome} con ${vincitore.punti} punti`);
+  console.log(`[${roomId}] Fine | Vince ${risultati[0].nome} con ${risultati[0].punti}pt`);
 }
 
-// ── AVVIO SERVER ───────────────────────────────────────
+// ── AVVIO ─────────────────────────────────────────────
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`Briscola server running on port ${PORT}`);
-});
+server.listen(PORT, () => console.log(`Briscola server on port ${PORT}`));
