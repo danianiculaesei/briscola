@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#1a0a00">
+  <title>Briscola — Partita</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="page-game">
+
+  <!-- TOP BAR -->
+  <div class="game-topbar">
+    <div class="topbar-left">
+      <span class="topbar-logo">♠ Briscola</span>
+    </div>
+    <div class="topbar-center">
+      <span class="deck-count" id="deck-count">🂠 —</span>
+    </div>
+    <div class="topbar-right">
+      <span class="my-score-badge">Punti: <strong id="my-score">0</strong></span>
+    </div>
+  </div>
+
+  <!-- TAVOLO -->
+  <div class="tavolo">
+
+    <!-- Avversari (in alto) -->
+    <div class="opponents-row" id="opponents-row"></div>
+
+    <!-- Centro tavolo: briscola + carte giocate -->
+    <div class="tavolo-center">
+      <div class="briscola-slot" id="briscola-slot">
+        <div class="slot-label">Briscola</div>
+        <div class="carta-placeholder"></div>
+      </div>
+
+      <div class="played-area" id="played-area">
+        <div class="slot-label">Mano in corso</div>
+        <div class="played-cards" id="played-cards"></div>
+      </div>
+    </div>
+
+    <!-- Mano del giocatore (in basso) -->
+    <div class="my-area">
+      <div class="my-name-bar">
+        <span id="my-name">Tu</span>
+        <span class="turn-badge" id="turn-badge">In attesa…</span>
+      </div>
+      <div class="my-hand" id="my-hand"></div>
+    </div>
+
+  </div>
+
+  <!-- PANNELLO PUNTEGGI -->
+  <div class="scores-panel" id="scores-panel" style="display:none">
+    <div class="scores-inner" id="scores-inner"></div>
+    <button class="btn-scores-close" onclick="closeScores()">✕</button>
+  </div>
+  <button class="btn-scores-open" onclick="openScores()" title="Punteggi">📊</button>
+
+  <!-- MODALE FINE PARTITA -->
+  <div class="modal-overlay" id="modal-end" style="display:none">
+    <div class="modal-box">
+      <div class="modal-icon" id="modal-icon"></div>
+      <div class="modal-title" id="modal-title"></div>
+      <div class="modal-subtitle" id="modal-subtitle"></div>
+      <div class="results-list" id="results-list"></div>
+      <a href="/" class="btn-card btn-primary" style="margin-top:1.5rem">Torna alla lobby</a>
+    </div>
+  </div>
+
+  <!-- TOAST -->
+  <div class="toast" id="toast"></div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>
