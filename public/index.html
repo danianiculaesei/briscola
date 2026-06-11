@@ -86,7 +86,7 @@
   <div class="game-topbar">
     <span class="topbar-logo">♠ Briscola</span>
     <span class="deck-count" id="deck-count">🂠 —</span>
-    <span class="my-score-badge">Punti: <strong id="my-score">0</strong></span>
+    <span class="my-score-badge"><span id="score-label">Punti:</span> <strong id="my-score">0</strong></span>
   </div>
 
   <div class="tavolo">
@@ -148,14 +148,17 @@
 // ══════════════════════════════════════════════
 const socket = io();
 
-let myNome       = '';
-let myRoomId     = '';
-let myToken      = '';   // token fisso assegnato dal server
+let myNome          = '';
+let myRoomId        = '';
+let myToken         = '';
 let selectedPlayers = 2;
-let gameState    = null; // { giocatori, briscola, turnoDi, punteggi, mazzoRimanente }
-let myMano       = [];
-let mioTurno     = false;
-let punteggi     = {};
+let gameState       = null;
+let myMano          = [];
+let mioTurno        = false;
+let punteggi        = {};
+let squadre         = null;  // { A:[tok,tok], B:[tok,tok] } o null
+let compagnoToken   = null;
+let compagnoNome    = null;
 
 // ── COSTANTI ──────────────────────────────────
 const SEMI_IT      = { bastoni:'Bastoni', coppe:'Coppe', denari:'Denari', spade:'Spade' };
@@ -267,23 +270,36 @@ socket.on('errore', ({ msg }) => {
 // SOCKET — GIOCO EVENTI
 // ══════════════════════════════════════════════
 
-socket.on('partita_iniziata', ({ token, giocatori, mano, briscola, turnoDi, punteggi: pts, mazzoRimanente }) => {
-  myToken   = token;
-  punteggi  = pts || {};
-  gameState = { giocatori, briscola, turnoDi, mazzoRimanente };
-  myMano    = mano;
+socket.on('partita_iniziata', ({ token, giocatori, mano, briscola, turnoDi, punteggi: pts,
+                                  mazzoRimanente, squadre: sq, compagnoToken: ct, compagnoNome: cn }) => {
+  myToken      = token;
+  punteggi     = pts || {};
+  squadre      = sq || null;
+  compagnoToken = ct || null;
+  compagnoNome  = cn || null;
+  gameState    = { giocatori, briscola, turnoDi, mazzoRimanente };
+  myMano       = mano;
 
   // Passa alla schermata di gioco
   document.getElementById('lobby').style.display     = 'none';
   document.getElementById('game-page').style.display = 'flex';
 
+  // Nome + badge compagno in topbar
   document.getElementById('my-name').textContent = myNome;
+  const scoreLabel = document.getElementById('score-label');
+  if (scoreLabel) scoreLabel.textContent = squadre ? 'Squadra:' : 'Punti:';
+
   renderBriscola(briscola);
   renderOpponents(giocatori);
   renderMyHand();
   updateDeckCount(mazzoRimanente);
   updateAllScores();
   updateTurn(turnoDi);
+
+  // Mostra badge compagno
+  if (compagnoNome) {
+    showToast(`🤝 Sei in coppia con ${compagnoNome}!`, 4000);
+  }
 });
 
 socket.on('carta_giocata', ({ token, carta, carteGiocate }) => {
@@ -307,9 +323,15 @@ socket.on('turno', ({ token }) => {
 
 socket.on('fine_mano', ({ vincitoreToken, carteGiocate, punteggi: pts }) => {
   punteggi = pts;
-  const vG = gameState.giocatori.find(g => g.token === vincitoreToken);
+  const vG    = gameState.giocatori.find(g => g.token === vincitoreToken);
   const vNome = vG ? vG.nome : '?';
-  showToast(vincitoreToken === myToken ? '🃏 Hai preso la mano!' : `🃏 ${vNome} prende!`);
+  const isMe      = vincitoreToken === myToken;
+  const isPartner = vincitoreToken === compagnoToken;
+  let msg;
+  if (isMe)           msg = '🃏 Hai preso la mano!';
+  else if (isPartner) msg = `🤝 ${vNome} (compagno) prende!`;
+  else                msg = `🃏 ${vNome} prende!`;
+  showToast(msg);
   updateAllScores();
   setTimeout(() => {
     document.getElementById('played-cards').innerHTML = '';
@@ -325,8 +347,8 @@ socket.on('aggiornamento_mano', ({ mano, mazzoRimanente, punteggi: pts }) => {
   updateAllScores();
 });
 
-socket.on('partita_finita', ({ risultati, vincitore }) => {
-  showEndModal(risultati, vincitore);
+socket.on('partita_finita', ({ risultati, vincitore, modalitaSquadre }) => {
+  showEndModal(risultati, vincitore, modalitaSquadre);
 });
 
 socket.on('briscola_presa', ({ token, nome, briscola }) => {
@@ -379,8 +401,9 @@ function renderOpponents(giocatori) {
   const row = document.getElementById('opponents-row');
   row.innerHTML = '';
   giocatori.filter(g => g.token !== myToken).forEach(g => {
+    const isPartner = squadre && g.token === compagnoToken;
     const div = document.createElement('div');
-    div.className = 'opponent-slot';
+    div.className = 'opponent-slot' + (isPartner ? ' partner-slot' : '');
     div.id = `opp-slot-${g.token}`;
     const handDiv = document.createElement('div');
     handDiv.className = 'opp-hand';
@@ -388,10 +411,13 @@ function renderOpponents(giocatori) {
     handDiv.appendChild(makeRetro());
     handDiv.appendChild(makeRetro());
     handDiv.appendChild(makeRetro());
+    const partnerBadge = isPartner
+      ? `<span class="partner-badge">🤝 compagno</span>`
+      : '';
     div.innerHTML = `
-      <div class="opp-avatar">${g.nome[0].toUpperCase()}</div>
+      <div class="opp-avatar${isPartner ? ' partner-avatar' : ''}">${g.nome[0].toUpperCase()}</div>
       <div class="opp-info">
-        <span class="opp-name">${g.nome}</span>
+        <span class="opp-name">${g.nome}${partnerBadge}</span>
         <span class="opp-pts" id="pts-${g.token}">${punteggi[g.token] || 0} pt</span>
       </div>
     `;
@@ -460,7 +486,9 @@ function giocaCarta(carta, el) {
 // ══════════════════════════════════════════════
 
 function updateAllScores() {
-  document.getElementById('my-score').textContent = punteggi[myToken] || 0;
+  // Topbar: in modalità squadra mostra i punti della coppia
+  const myPts = punteggi[myToken] || 0;
+  document.getElementById('my-score').textContent = myPts;
   if (!gameState) return;
   gameState.giocatori.forEach(g => {
     const el = document.getElementById(`pts-${g.token}`);
@@ -478,18 +506,41 @@ function updateDeckCount(n) {
 function openScores()  { document.getElementById('scores-panel').style.display = 'flex'; }
 function closeScores() { document.getElementById('scores-panel').style.display = 'none'; }
 
-function showEndModal(risultati, vincitore) {
-  const isWinner = vincitore.token === myToken;
-  document.getElementById('modal-icon').textContent    = isWinner ? '🏆' : '😔';
-  document.getElementById('modal-title').textContent   = isWinner ? 'Hai vinto!' : `${vincitore.nome} vince!`;
-  document.getElementById('modal-subtitle').textContent = `${vincitore.punti} punti su 120`;
-  document.getElementById('results-list').innerHTML = risultati.map((r, i) => `
-    <div class="result-row ${r.token === myToken ? 'is-me' : ''}">
-      <span class="result-pos">${['🥇','🥈','🥉'][i] || (i+1)+'°'}</span>
-      <span class="result-name">${r.nome}${r.token === myToken ? ' (Tu)' : ''}</span>
-      <span class="result-pts">${r.punti} pt</span>
-    </div>
-  `).join('');
+function showEndModal(risultati, vincitore, modalitaSquadre) {
+  let isWinner;
+  if (modalitaSquadre) {
+    isWinner = vincitore.tokens && vincitore.tokens.includes(myToken);
+    document.getElementById('modal-icon').textContent    = isWinner ? '🏆' : '😔';
+    document.getElementById('modal-title').textContent   = isWinner ? 'Avete vinto!' : 'Avete perso!';
+    document.getElementById('modal-subtitle').textContent = `Squadra ${vincitore.squadra}: ${vincitore.punti} punti su 120`;
+    document.getElementById('results-list').innerHTML = risultati.map((r, i) => {
+      const isMy = r.tokens && r.tokens.includes(myToken);
+      const medal = i === 0 ? '🥇' : '🥈';
+      const nomi  = r.nomi.map((n, ni) => {
+        const tok = r.tokens[ni];
+        const isMe = tok === myToken;
+        const isCp = tok === compagnoToken;
+        return n + (isMe ? ' (Tu)' : isCp ? ' (compagno)' : '');
+      }).join(' & ');
+      return `<div class="result-row ${isMy ? 'is-me' : ''}">
+        <span class="result-pos">${medal}</span>
+        <span class="result-name">Coppia ${r.squadra}: ${nomi}</span>
+        <span class="result-pts">${r.punti} pt</span>
+      </div>`;
+    }).join('');
+  } else {
+    isWinner = vincitore.token === myToken;
+    document.getElementById('modal-icon').textContent    = isWinner ? '🏆' : '😔';
+    document.getElementById('modal-title').textContent   = isWinner ? 'Hai vinto!' : `${vincitore.nome} vince!`;
+    document.getElementById('modal-subtitle').textContent = `${vincitore.punti} punti su 120`;
+    document.getElementById('results-list').innerHTML = risultati.map((r, i) => `
+      <div class="result-row ${r.token === myToken ? 'is-me' : ''}">
+        <span class="result-pos">${['🥇','🥈','🥉'][i] || (i+1)+'°'}</span>
+        <span class="result-name">${r.nome}${r.token === myToken ? ' (Tu)' : ''}</span>
+        <span class="result-pts">${r.punti} pt</span>
+      </div>
+    `).join('');
+  }
   document.getElementById('modal-end').style.display = 'flex';
 }
 
@@ -499,6 +550,7 @@ function tornaLobby() {
   document.getElementById('lobby').style.display      = 'flex';
   gameState = null; myMano = []; punteggi = {}; mioTurno = false;
   myToken = ''; myRoomId = '';
+  squadre = null; compagnoToken = null; compagnoNome = null;
   goLobbyScreen('screen-home');
 }
 
