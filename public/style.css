@@ -591,6 +591,33 @@ html, body {
    RESPONSIVE
    ══════════════════════════════════════════════════════ */
 
+/* ══════════════════════════════════════════════════════
+   BADGE COMPAGNO (4 giocatori)
+   ══════════════════════════════════════════════════════ */
+
+.partner-badge {
+  display: inline-block;
+  font-size: 0.58rem;
+  letter-spacing: 0.5px;
+  background: rgba(46,180,50,0.18);
+  color: #6fda72;
+  border: 1px solid rgba(46,180,50,0.35);
+  border-radius: 10px;
+  padding: 1px 7px;
+  margin-left: 6px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.partner-avatar {
+  background: #2e7a32 !important;
+  box-shadow: 0 0 0 2px #6fda72;
+}
+
+.partner-slot .opp-pts {
+  color: #6fda72 !important;
+}
+
 @media (max-width: 380px) {
   :root { --card-w: 60px; --card-h: 90px; }
   .c-sym-big { font-size: 1.3rem; }
