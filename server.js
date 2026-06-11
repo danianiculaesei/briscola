@@ -255,15 +255,6 @@ io.on('connection', socket => {
     if (tutteVuote) {
       finePartita(socket.roomId);
     } else {
-      // Controlla 61 punti (solo squadre 4p)
-      if (game.squadre) {
-        const sqA = game.punteggiSquadra.A;
-        const sqB = game.punteggiSquadra.B;
-        if (sqA >= 61 || sqB >= 61) {
-          finePartita(socket.roomId);
-          return;
-        }
-      }
       io.to(socket.roomId).emit('turno', { token: game.turnoDi });
     }
   });
