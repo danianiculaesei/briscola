@@ -269,6 +269,7 @@ io.on('connection', socket => {
     const ordinePesca = Array.from({length: nG}, (_, i) => game.giocatori[(si + i) % nG]);
     const carteNormali = game.mazzo.length - 1; // mazzo[0] è la briscola
 
+    // 1) Prima TUTTI pescano (così il conteggio finale è uno solo)
     for (let i = 0; i < ordinePesca.length; i++) {
       const g = ordinePesca[i];
 
@@ -282,7 +283,10 @@ io.on('connection', socket => {
           token: g.token, nome: g.nome, briscola: bCard,
         });
       }
+    }
 
+    // 2) Poi notifica a ciascuno la mano col conteggio finale UNIFORME
+    for (const g of ordinePesca) {
       const sock = [...io.sockets.sockets.values()].find(s => s.token === g.token);
       if (sock) sock.emit('aggiornamento_mano', {
         mano:           game.mani[g.token],
