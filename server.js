@@ -114,6 +114,7 @@ function nuovaPartita(giocatori) {
     punteggiIndividuali,
     punteggiSquadra,
     prese, finita: false,
+    briscolaPresa: false,
   };
 }
 
@@ -169,6 +170,45 @@ io.on('connection', socket => {
     });
     console.log(`[${roomId}] ${nome} entrato (token:${token})`);
     if (st.giocatori.length === st.maxGiocatori) avviaPartita(roomId);
+  });
+
+  socket.on('riconnetti', ({ token, roomId }) => {
+    const st = rooms[roomId];
+    if (!st || !st.game || st.stato !== 'in_gioco') {
+      socket.emit('riconnessione_fallita'); return;
+    }
+    const g = st.giocatori.find(x => x.token === token);
+    if (!g) { socket.emit('riconnessione_fallita'); return; }
+
+    // Riassocia il nuovo socket al giocatore esistente
+    g.socketId    = socket.id;
+    socket.token  = token;
+    socket.roomId = roomId;
+    socket.join(roomId);
+
+    const game     = st.game;
+    const compagno = game.squadre ? compagnoDi(token, game.squadre) : null;
+    const compagnoNome = compagno
+      ? (game.giocatori.find(x => x.token === compagno)?.nome || null)
+      : null;
+
+    socket.emit('partita_ripresa', {
+      token,
+      giocatori:      game.giocatori.map(x => ({ token: x.token, nome: x.nome })),
+      mano:           game.mani[token],
+      briscola:       game.briscola,
+      turnoDi:        game.turnoDi,
+      punteggi:       punteggiPerClient(game),
+      mazzoRimanente: game.mazzo.length,
+      carteGiocate:   game.carteGiocate,
+      squadre:        game.squadre,
+      compagnoToken:  compagno,
+      compagnoNome,
+      briscolaPresa:  game.briscolaPresa,
+    });
+
+    socket.broadcast.to(roomId).emit('giocatore_riconnesso', { msg: `${g.nome} è tornato in partita.` });
+    console.log(`[${roomId}] ${g.nome} riconnesso (token:${token})`);
   });
 
   socket.on('gioca_carta', ({ carta }) => {
@@ -237,6 +277,7 @@ io.on('connection', socket => {
       } else if (game.mazzo.length === 1 && i === ordinePesca.length - 1) {
         const bCard = game.mazzo.pop();
         game.mani[g.token].push(bCard);
+        game.briscolaPresa = true;
         io.to(socket.roomId).emit('briscola_presa', {
           token: g.token, nome: g.nome, briscola: bCard,
         });

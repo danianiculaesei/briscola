@@ -148,6 +148,33 @@
 // ══════════════════════════════════════════════
 const socket = io();
 
+// ── Sessione persistente (per riconnessione dopo reload/caduta) ──
+function saveSession() {
+  sessionStorage.setItem('briscola_sess',
+    JSON.stringify({ token: myToken, roomId: myRoomId, nome: myNome }));
+}
+function clearSession() { sessionStorage.removeItem('briscola_sess'); }
+
+const _saved = JSON.parse(sessionStorage.getItem('briscola_sess') || 'null');
+// Se c'è una partita salvata, nascondi subito la lobby (niente lampeggio)
+if (_saved && _saved.token && _saved.roomId) {
+  const _lb = document.getElementById('lobby');
+  if (_lb) _lb.style.display = 'none';
+}
+
+// Al (ri)collegamento del socket prova a rientrare nella partita salvata.
+// Legge sempre la sessione "fresca": copre sia il reload pagina sia la
+// caduta/riconnessione del socket durante la stessa sessione.
+socket.on('connect', () => {
+  const s = JSON.parse(sessionStorage.getItem('briscola_sess') || 'null');
+  if (s && s.token && s.roomId) {
+    myNome   = s.nome;
+    myToken  = s.token;
+    myRoomId = s.roomId;
+    socket.emit('riconnetti', { token: s.token, roomId: s.roomId });
+  }
+});
+
 let myNome          = '';
 let myRoomId        = '';
 let myToken         = '';
@@ -156,6 +183,7 @@ let gameState       = null;
 let myMano          = [];
 let mioTurno        = false;
 let punteggi        = {};
+let clearTrickTimer = null;  // timer pulizia carte giocate
 let squadre         = null;  // { A:[tok,tok], B:[tok,tok] } o null
 let compagnoToken   = null;
 let compagnoNome    = null;
@@ -207,6 +235,7 @@ function entraStanza() {
   myNome = document.getElementById('nome-input').value.trim();
   const roomId = document.getElementById('room-input').value.trim().toUpperCase();
   if (!roomId) { setErr('err-join', 'Inserisci il codice stanza.'); return; }
+  myRoomId = roomId;
   socket.emit('entra_stanza', { nome: myNome, roomId });
 }
 
@@ -270,39 +299,76 @@ socket.on('errore', ({ msg }) => {
 // SOCKET — GIOCO EVENTI
 // ══════════════════════════════════════════════
 
-socket.on('partita_iniziata', ({ token, giocatori, mano, briscola, turnoDi, punteggi: pts,
-                                  mazzoRimanente, squadre: sq, compagnoToken: ct, compagnoNome: cn }) => {
-  myToken      = token;
-  punteggi     = pts || {};
-  squadre      = sq || null;
-  compagnoToken = ct || null;
-  compagnoNome  = cn || null;
-  gameState    = { giocatori, briscola, turnoDi, mazzoRimanente };
-  myMano       = mano;
+// Costruisce/ripristina il tavolo — usata sia all'inizio sia alla riconnessione
+function enterGame(d) {
+  myToken       = d.token;
+  punteggi      = d.punteggi || {};
+  squadre       = d.squadre || null;
+  compagnoToken = d.compagnoToken || null;
+  compagnoNome  = d.compagnoNome || null;
+  gameState     = {
+    giocatori: d.giocatori,
+    briscola:  d.briscola,
+    turnoDi:   d.turnoDi,
+    mazzoRimanente: d.mazzoRimanente,
+    carteGiocate:   d.carteGiocate || [],
+  };
+  myMano = d.mano || [];
 
-  // Passa alla schermata di gioco
   document.getElementById('lobby').style.display     = 'none';
   document.getElementById('game-page').style.display = 'flex';
 
-  // Nome + badge compagno in topbar
   document.getElementById('my-name').textContent = myNome;
   const scoreLabel = document.getElementById('score-label');
   if (scoreLabel) scoreLabel.textContent = squadre ? 'Squadra:' : 'Punti:';
 
-  renderBriscola(briscola);
-  renderOpponents(giocatori);
-  renderMyHand();
-  updateDeckCount(mazzoRimanente);
-  updateAllScores();
-  updateTurn(turnoDi);
-
-  // Mostra badge compagno
-  if (compagnoNome) {
-    showToast(`🤝 Sei in coppia con ${compagnoNome}!`, 4000);
+  renderBriscola(d.briscola);
+  if (d.briscolaPresa) {
+    const slot = document.getElementById('briscola-slot');
+    if (slot) slot.style.opacity = '0.25';
   }
+  renderOpponents(d.giocatori);
+  renderMyHand();
+  updateDeckCount(d.mazzoRimanente);
+  updateAllScores();
+  if (d.carteGiocate && d.carteGiocate.length) renderPlayedCards(d.carteGiocate);
+  updateTurn(d.turnoDi);
+
+  saveSession();
+}
+
+socket.on('partita_iniziata', (data) => {
+  enterGame(data);
+  if (compagnoNome) showToast(`🤝 Sei in coppia con ${compagnoNome}!`, 4000);
+});
+
+socket.on('partita_ripresa', (data) => {
+  enterGame(data);
+  showToast('🔄 Partita ripristinata', 2500);
+});
+
+socket.on('riconnessione_fallita', () => {
+  clearSession();
+  document.getElementById('game-page').style.display = 'none';
+  const lb = document.getElementById('lobby');
+  if (lb) lb.style.display = 'flex';
+  goLobbyScreen('screen-home');
+});
+
+socket.on('giocatore_riconnesso', ({ msg }) => {
+  showToast('✅ ' + msg, 3000);
 });
 
 socket.on('carta_giocata', ({ token, carta, carteGiocate }) => {
+  // Se inizia una nuova mano prima che il timer di pulizia scatti,
+  // annullalo per non cancellare la carta appena giocata
+  if (carteGiocate.length === 1 && clearTrickTimer) {
+    clearTimeout(clearTrickTimer);
+    clearTrickTimer = null;
+    const c = document.getElementById('played-cards');
+    c.classList.remove('clearing');
+    c.innerHTML = '';
+  }
   gameState.carteGiocate = carteGiocate;
   renderPlayedCards(carteGiocate);
   // Riduci carte coperte avversario
@@ -333,10 +399,24 @@ socket.on('fine_mano', ({ vincitoreToken, carteGiocate, punteggi: pts }) => {
   else                msg = `🃏 ${vNome} prende!`;
   showToast(msg);
   updateAllScores();
-  setTimeout(() => {
-    document.getElementById('played-cards').innerHTML = '';
-    gameState.carteGiocate = [];
-  }, 1000);
+
+  // Evidenzia la carta vincente, sfuma le altre → si vede chi ha preso
+  const container = document.getElementById('played-cards');
+  container.querySelectorAll('.carta-img.played').forEach(c => {
+    if (c.dataset.token === vincitoreToken) c.classList.add('winner');
+    else                                    c.classList.add('dimmed');
+  });
+
+  // Tieni le carte in tavola per vedere bene la mano, poi sfuma e pulisci
+  clearTrickTimer = setTimeout(() => {
+    container.classList.add('clearing');
+    setTimeout(() => {
+      container.classList.remove('clearing');
+      container.innerHTML = '';
+      gameState.carteGiocate = [];
+      clearTrickTimer = null;
+    }, 300);
+  }, 2000);
 });
 
 socket.on('aggiornamento_mano', ({ mano, mazzoRimanente, punteggi: pts }) => {
@@ -348,6 +428,7 @@ socket.on('aggiornamento_mano', ({ mano, mazzoRimanente, punteggi: pts }) => {
 });
 
 socket.on('partita_finita', ({ risultati, vincitore, modalitaSquadre }) => {
+  clearSession();
   showEndModal(risultati, vincitore, modalitaSquadre);
 });
 
@@ -430,27 +511,46 @@ function renderMyHand() {
   const container = document.getElementById('my-hand');
   container.innerHTML = '';
   myMano.forEach(carta => {
-    const el = makeCarta(carta, 'mia-carta' + (mioTurno ? ' giocabile' : ''));
-    if (mioTurno) el.onclick = () => giocaCarta(carta, el);
+    const el = makeCarta(carta, 'mia-carta');
+    el._carta = carta;                 // riferimento per il click
     container.appendChild(el);
+  });
+  setHandPlayable();
+}
+
+// Abilita/disabilita il click sulle carte SENZA ricostruire la mano
+// (evita lo sfarfallio a ogni cambio di turno)
+function setHandPlayable() {
+  document.querySelectorAll('#my-hand .mia-carta').forEach(el => {
+    el.classList.toggle('giocabile', mioTurno);
+    el.onclick = mioTurno ? () => giocaCarta(el._carta, el) : null;
   });
 }
 
 function renderPlayedCards(carteGiocate) {
   const container = document.getElementById('played-cards');
-  container.innerHTML = '';
-  (carteGiocate || []).forEach(cg => {
-    const g    = gameState.giocatori.find(g => g.token === cg.token);
+  const cg = carteGiocate || [];
+  // Nuova mano (meno carte di quelle a video): ripulisci e riparti
+  if (cg.length < container.children.length) {
+    container.classList.remove('clearing');
+    container.innerHTML = '';
+  }
+  // Aggiungi SOLO le carte nuove → quelle già in tavola non sfarfallano
+  for (let i = container.children.length; i < cg.length; i++) {
+    const c    = cg[i];
+    const g    = gameState.giocatori.find(g => g.token === c.token);
     const nome = g ? g.nome : '?';
     const wrap = document.createElement('div');
     wrap.className = 'played-card-wrap';
     const label = document.createElement('div');
     label.className = 'played-player-name';
-    label.textContent = cg.token === myToken ? 'Tu' : nome;
+    label.textContent = c.token === myToken ? 'Tu' : nome;
     wrap.appendChild(label);
-    wrap.appendChild(makeCarta(cg.carta, 'played'));
+    const card = makeCarta(c.carta, 'played');
+    card.dataset.token = c.token;   // serve per evidenziare il vincitore
+    wrap.appendChild(card);
     container.appendChild(wrap);
-  });
+  }
 }
 
 // ══════════════════════════════════════════════
@@ -468,7 +568,13 @@ function updateTurn(token) {
     badge.textContent = `⏳ Turno di ${g ? g.nome : '…'}`;
     badge.className   = 'turn-badge';
   }
-  renderMyHand();
+
+  // Evidenzia di chi è il turno tra gli avversari
+  document.querySelectorAll('.opponent-slot').forEach(s => s.classList.remove('is-turn'));
+  const slot = document.getElementById(`opp-slot-${token}`);
+  if (slot) slot.classList.add('is-turn');
+
+  setHandPlayable();   // solo toggle, niente ricostruzione
 }
 
 function giocaCarta(carta, el) {
@@ -545,6 +651,7 @@ function showEndModal(risultati, vincitore, modalitaSquadre) {
 }
 
 function tornaLobby() {
+  clearSession();
   document.getElementById('modal-end').style.display  = 'none';
   document.getElementById('game-page').style.display  = 'none';
   document.getElementById('lobby').style.display      = 'flex';
