@@ -415,8 +415,8 @@ html, body {
 }
 .carta-img.giocabile:active { transform: translateY(-8px) scale(1.02); }
 .carta-img.playing {
-  transform: translateY(-30px) scale(0.85);
-  opacity: 0.3; pointer-events: none; transition: all 0.2s;
+  transform: translateY(-40px) scale(0.7);
+  opacity: 0; pointer-events: none; transition: transform 0.25s ease, opacity 0.25s ease;
 }
 .carta-img.briscola-card {
   transform: rotate(-18deg);

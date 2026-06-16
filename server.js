@@ -294,7 +294,9 @@ io.on('connection', socket => {
     // ── Fine partita? ───────────────────────────────────
     const tutteVuote = game.giocatori.every(g => (game.mani[g.token]||[]).length === 0);
     if (tutteVuote) {
-      finePartita(socket.roomId);
+      // Aspetta che l'ultima presa resti visibile prima della schermata finale
+      const roomId = socket.roomId;
+      setTimeout(() => finePartita(roomId), 2200);
     } else {
       io.to(socket.roomId).emit('turno', { token: game.turnoDi });
     }
