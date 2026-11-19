@@ -12,8 +12,8 @@ const io     = new Server(server, {
   pingInterval: 25000,
 });
 
+// public/ contiene anche carte/ (necessario per il deploy statico su Netlify)
 app.use(express.static(path.join(__dirname, 'public')));
-app.use('/carte', express.static(path.join(__dirname, 'carte')));
 app.get('/', (_, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 // ── COSTANTI ──────────────────────────────────────────
@@ -78,7 +78,7 @@ function compagnoDi(token, squadre) {
 }
 
 // ── NUOVA PARTITA ─────────────────────────────────────
-function nuovaPartita(giocatori) {
+function nuovaPartita(giocatori, primoIdx = 0) {
   const mazzo = creaMazzo();
   const mani={}, punteggiIndividuali={}, prese={};
 
@@ -109,7 +109,7 @@ function nuovaPartita(giocatori) {
     giocatori, mani, mazzo,
     briscola: briscolaCard,
     squadre,
-    turnoDi: giocatori[0].token,
+    turnoDi: giocatori[primoIdx % giocatori.length].token,
     carteGiocate: [], semePartenza: null,
     punteggiIndividuali,
     punteggiSquadra,
@@ -306,6 +306,48 @@ io.on('connection', socket => {
     }
   });
 
+  socket.on('nuova_partita', () => {
+    const roomId = socket.roomId;
+    const st = rooms[roomId];
+    if (!st || st.stato !== 'finita') return;
+    const g = st.giocatori.find(x => x.token === socket.token);
+    if (!g) return;
+
+    st.rematchPronti = st.rematchPronti || [];
+    if (st.rematchPronti.includes(socket.token)) return;
+    st.rematchPronti.push(socket.token);
+
+    const nomiPronti = st.rematchPronti
+      .map(t => st.giocatori.find(x => x.token === t)?.nome)
+      .filter(Boolean);
+
+    io.to(roomId).emit('aggiornamento_rivincita', {
+      pronti: [...st.rematchPronti],
+      totale: st.giocatori.length,
+      nomiPronti,
+    });
+
+    if (st.rematchPronti.length === st.giocatori.length) {
+      avviaPartita(roomId);
+    }
+  });
+
+  socket.on('lascia_stanza', () => {
+    const roomId = socket.roomId;
+    if (!roomId || !rooms[roomId]) return;
+    const st = rooms[roomId];
+    socket.leave(roomId);
+    socket.roomId = null;
+    if (st.stato === 'finita') {
+      const g = st.giocatori.find(x => x.token === socket.token);
+      st.stato = 'chiusa';
+      io.to(roomId).emit('giocatore_uscito', {
+        nome: g ? g.nome : null,
+        msg:  `${g ? g.nome : 'Un giocatore'} ha lasciato la stanza.`,
+      });
+    }
+  });
+
   socket.on('disconnect', () => {
     const roomId = socket.roomId;
     if (!roomId || !rooms[roomId]) return;
@@ -320,6 +362,13 @@ io.on('connection', socket => {
     } else if (st.stato==='in_gioco') {
       const g = st.giocatori.find(g=>g.token===socket.token);
       io.to(roomId).emit('giocatore_disconnesso',{ msg:`${g?g.nome:'Un giocatore'} si è disconnesso.` });
+    } else if (st.stato==='finita') {
+      const g = st.giocatori.find(g=>g.token===socket.token);
+      st.stato = 'chiusa';
+      io.to(roomId).emit('giocatore_uscito',{
+        nome: g ? g.nome : null,
+        msg:  `${g?g.nome:'Un giocatore'} ha lasciato la stanza.`,
+      });
     }
     console.log(`[-] ${socket.id} (${socket.token||'?'})`);
   });
@@ -328,9 +377,12 @@ io.on('connection', socket => {
 // ── AVVIA PARTITA ─────────────────────────────────────
 function avviaPartita(roomId) {
   const st = rooms[roomId];
-  st.stato = 'in_gioco';
-  st.game  = nuovaPartita(st.giocatori);
-  const g  = st.game;
+  st.stato         = 'in_gioco';
+  st.rematchPronti = [];
+  st.numeroPartita = (st.numeroPartita || 0) + 1;
+  const primoIdx   = (st.numeroPartita - 1) % st.giocatori.length;
+  st.game          = nuovaPartita(st.giocatori, primoIdx);
+  const g          = st.game;
 
   for (const gioc of st.giocatori) {
     const sock = [...io.sockets.sockets.values()].find(s=>s.token===gioc.token);
@@ -353,6 +405,7 @@ function avviaPartita(roomId) {
       squadre:        g.squadre,          // { A:[tok,tok], B:[tok,tok] } oppure null
       compagnoToken:  compagno,
       compagnoNome,
+      numeroPartita:  st.numeroPartita,
     });
   }
   console.log(`[${roomId}] Avviata | Briscola: ${g.briscola.valore} di ${g.briscola.seme} | Squadre: ${JSON.stringify(g.squadre)}`);
@@ -361,8 +414,10 @@ function avviaPartita(roomId) {
 // ── FINE PARTITA ──────────────────────────────────────
 function finePartita(roomId) {
   const st = rooms[roomId];
+  if (!st || !st.game) return;
   const g  = st.game;
-  st.stato = 'finita';
+  st.stato         = 'finita';
+  st.rematchPronti = [];
 
   let risultati, vincitore;
 

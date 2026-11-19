@@ -133,20 +133,159 @@
       <div class="modal-title" id="modal-title"></div>
       <div class="modal-subtitle" id="modal-subtitle"></div>
       <div class="results-list" id="results-list"></div>
-      <button class="btn-card btn-primary" onclick="tornaLobby()" style="margin-top:1.5rem">Nuova partita</button>
+      <div class="rematch-status" id="rematch-status"></div>
+      <div class="modal-actions">
+        <button class="btn-card btn-primary" id="btn-rematch" onclick="chiediNuovaPartita()">🔄 Gioca ancora</button>
+        <button class="btn-card btn-secondary" onclick="tornaLobby()">← Torna alla lobby</button>
+      </div>
     </div>
   </div>
 
   <div class="toast" id="toast"></div>
 </div>
 
-<script src="/socket.io/socket.io.js"></script>
 <script>
 
 // ══════════════════════════════════════════════
-// STATO GLOBALE
+// TRASPORTO — polling HTTP verso /api/*
 // ══════════════════════════════════════════════
-const socket = io();
+// Netlify non può eseguire un server Socket.io (nessun processo persistente),
+// quindi il backend è una Netlify Function e gli eventi arrivano in polling.
+// Questo oggetto espone la stessa interfaccia .on()/.emit() del socket:
+// il resto del file è rimasto invariato.
+const socket = (() => {
+  const handlers = {};
+  const sess = { roomId: null, token: null };
+  let cursor     = 0;
+  let intervallo = 2500;   // lobby: ritmo lento
+  let attivo     = false;
+  let timer      = null;
+  let coda       = Promise.resolve();
+  let gen        = 0;
+
+  function fire(name, data) {
+    for (const fn of handlers[name] || []) {
+      try { fn(data); } catch (e) { console.error(`handler ${name}`, e); }
+    }
+  }
+
+  function ferma() {
+    attivo = false;
+    clearTimeout(timer);
+    timer = null;
+  }
+
+  function reset() {
+    gen++;
+    ferma();
+    sess.roomId = null;
+    sess.token  = null;
+    cursor      = 0;
+    intervallo  = 2500;
+  }
+
+  function applica(res, myGen) {
+    if (myGen !== gen) return;
+    if (res.roomId) sess.roomId = res.roomId;
+    if (res.token)  sess.token  = res.token;
+    if (typeof res.cursor === 'number') cursor = res.cursor;
+
+    let stopPolling = false;
+    for (const ev of res.events || []) {
+      // Il ritmo si adatta: veloce in partita, lento in lobby e a fine partita (per rivincita).
+      if (ev.name === 'partita_iniziata' || ev.name === 'partita_ripresa') intervallo = 1200;
+      if (ev.name === 'partita_finita') intervallo = 2500;
+      if (ev.name === 'giocatore_uscito' || ev.name === 'riconnessione_fallita') stopPolling = true;
+      fire(ev.name, ev.data);
+    }
+    if (myGen !== gen) return;
+    if (stopPolling) {
+      ferma();
+    } else if (sess.roomId && sess.token && !attivo) {
+      avvia();
+    }
+  }
+
+  async function richiesta(azione, payload) {
+    const res = await fetch(`/api/${azione}`, {
+      method:  'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ...payload,
+        roomId: payload.roomId || sess.roomId,
+        token:  payload.token  || sess.token,
+        cursor,
+      }),
+    });
+    return res.json();
+  }
+
+  // Una richiesta per volta: due chiamate in volo insieme partirebbero dallo
+  // stesso cursore e riceverebbero gli stessi eventi due volte (la carta
+  // giocata comparirebbe due volte sul tavolo).
+  function chiama(azione, payload = {}) {
+    const next = coda.then(() => richiesta(azione, payload));
+    coda = next.then(() => {}, () => {});
+    return next;
+  }
+
+  async function ciclo() {
+    if (!attivo) return;
+    const myGen = gen;
+    try {
+      applica(await chiama('poll'), myGen);
+    } catch {
+      // Rete assente o funzione lenta: si riprova al giro successivo.
+    } finally {
+      if (attivo && myGen === gen) timer = setTimeout(ciclo, intervallo);
+    }
+  }
+
+  function avvia() {
+    if (attivo || !sess.roomId || !sess.token) return;
+    attivo = true;
+    clearTimeout(timer);
+    timer = setTimeout(ciclo, intervallo);
+  }
+
+  const api = {
+    on(name, fn) { (handlers[name] ||= []).push(fn); },
+    emit(azione, payload = {}) {
+      if (azione === 'crea_stanza' || azione === 'entra_stanza') {
+        reset();
+      } else if (azione === 'riconnetti') {
+        reset();
+        sess.roomId = payload.roomId;
+        sess.token  = payload.token;
+      }
+      const myGen = gen;
+      chiama(azione, payload)
+        .then(res => applica(res, myGen))
+        .catch(() => {
+          if (myGen === gen) fire('errore', { msg: 'Connessione al server non riuscita.' });
+        });
+    },
+    reset,
+    leave() {
+      const rid = sess.roomId;
+      const tok = sess.token;
+      reset();
+      if (rid && tok) {
+        fetch('/api/lascia_stanza', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ roomId: rid, token: tok }),
+          keepalive: true,
+        }).catch(() => {});
+      }
+    },
+  };
+
+  // Il socket vero emetteva 'connect' in modo asincrono: qui si aspetta
+  // che il resto dello script abbia registrato tutti i suoi handler.
+  setTimeout(() => fire('connect', {}), 0);
+  return api;
+})();
 
 // ── Sessione persistente (per riconnessione dopo reload/caduta) ──
 function saveSession() {
@@ -187,6 +326,8 @@ let clearTrickTimer = null;  // timer pulizia carte giocate
 let squadre         = null;  // { A:[tok,tok], B:[tok,tok] } o null
 let compagnoToken   = null;
 let compagnoNome    = null;
+let rematchRichiesta = false;
+let rematchChiusa    = false;
 
 // ── COSTANTI ──────────────────────────────────
 const SEMI_IT      = { bastoni:'Bastoni', coppe:'Coppe', denari:'Denari', spade:'Spade' };
@@ -293,6 +434,15 @@ socket.on('errore', ({ msg }) => {
   setErr('err-join', msg);
   setErr('err-create', msg);
   showToast('⚠ ' + msg, 3000);
+  if (rematchRichiesta && !rematchChiusa && document.getElementById('modal-end').style.display !== 'none') {
+    const btn = document.getElementById('btn-rematch');
+    if (btn && !btn.textContent.includes('/')) {
+      rematchRichiesta = false;
+      btn.disabled = false;
+      btn.classList.remove('waiting');
+      btn.textContent = '🔄 Gioca ancora';
+    }
+  }
 });
 
 // ══════════════════════════════════════════════
@@ -301,6 +451,13 @@ socket.on('errore', ({ msg }) => {
 
 // Costruisce/ripristina il tavolo — usata sia all'inizio sia alla riconnessione
 function enterGame(d) {
+  if (clearTrickTimer) {
+    clearTimeout(clearTrickTimer);
+    clearTrickTimer = null;
+  }
+  rematchRichiesta = false;
+  rematchChiusa    = false;
+
   myToken       = d.token;
   punteggi      = d.punteggi || {};
   squadre       = d.squadre || null;
@@ -315,18 +472,22 @@ function enterGame(d) {
   };
   myMano = d.mano || [];
 
-  document.getElementById('lobby').style.display     = 'none';
-  document.getElementById('game-page').style.display = 'flex';
+  document.getElementById('modal-end').style.display    = 'none';
+  document.getElementById('scores-panel').style.display = 'none';
+  document.getElementById('lobby').style.display        = 'none';
+  document.getElementById('game-page').style.display    = 'flex';
+
+  const played = document.getElementById('played-cards');
+  played.classList.remove('clearing');
+  played.innerHTML = '';
 
   document.getElementById('my-name').textContent = myNome;
   const scoreLabel = document.getElementById('score-label');
   if (scoreLabel) scoreLabel.textContent = squadre ? 'Squadra:' : 'Punti:';
 
   renderBriscola(d.briscola);
-  if (d.briscolaPresa) {
-    const slot = document.getElementById('briscola-slot');
-    if (slot) slot.style.opacity = '0.25';
-  }
+  const bSlot = document.getElementById('briscola-slot');
+  if (bSlot) bSlot.style.opacity = d.briscolaPresa ? '0.25' : '1';
   renderOpponents(d.giocatori);
   renderMyHand();
   updateDeckCount(d.mazzoRimanente);
@@ -339,7 +500,11 @@ function enterGame(d) {
 
 socket.on('partita_iniziata', (data) => {
   enterGame(data);
-  if (compagnoNome) showToast(`🤝 Sei in coppia con ${compagnoNome}!`, 4000);
+  if (data.numeroPartita && data.numeroPartita > 1) {
+    showToast(`🃏 Nuova partita #${data.numeroPartita} iniziata!`, 3500);
+  } else if (compagnoNome) {
+    showToast(`🤝 Sei in coppia con ${compagnoNome}!`, 4000);
+  }
 });
 
 socket.on('partita_ripresa', (data) => {
@@ -348,6 +513,7 @@ socket.on('partita_ripresa', (data) => {
 });
 
 socket.on('riconnessione_fallita', () => {
+  socket.reset();
   clearSession();
   document.getElementById('game-page').style.display = 'none';
   const lb = document.getElementById('lobby');
@@ -430,6 +596,49 @@ socket.on('aggiornamento_mano', ({ mano, mazzoRimanente, punteggi: pts }) => {
 socket.on('partita_finita', ({ risultati, vincitore, modalitaSquadre }) => {
   clearSession();
   showEndModal(risultati, vincitore, modalitaSquadre);
+});
+
+socket.on('aggiornamento_rivincita', ({ pronti, totale, nomiPronti }) => {
+  if (rematchChiusa) return;
+  const btn    = document.getElementById('btn-rematch');
+  const status = document.getElementById('rematch-status');
+  const ioPronto = pronti.includes(myToken);
+
+  if (ioPronto) {
+    rematchRichiesta = true;
+    btn.disabled = true;
+    btn.classList.add('waiting');
+    btn.textContent = `✓ Pronto (${pronti.length}/${totale}) — in attesa…`;
+    const mancanti = (gameState?.giocatori || [])
+      .filter(g => !pronti.includes(g.token))
+      .map(g => g.nome);
+    status.textContent = mancanti.length > 0
+      ? `In attesa di ${mancanti.join(', ')}…`
+      : 'Tutti pronti! Nuova partita in avvio…';
+  } else {
+    btn.disabled = false;
+    btn.classList.remove('waiting');
+    btn.textContent = `🔄 Gioca ancora (${pronti.length}/${totale})`;
+    if (nomiPronti && nomiPronti.length === 1) {
+      status.textContent = `${nomiPronti[0]} vuole fare una nuova partita!`;
+    } else if (nomiPronti && nomiPronti.length > 1) {
+      status.textContent = `${nomiPronti.join(', ')} vogliono fare una nuova partita!`;
+    }
+  }
+});
+
+socket.on('giocatore_uscito', ({ msg }) => {
+  rematchChiusa = true;
+  const btn    = document.getElementById('btn-rematch');
+  const status = document.getElementById('rematch-status');
+  if (btn) {
+    btn.disabled = true;
+    btn.style.display = 'none';
+  }
+  if (status) {
+    status.classList.add('closed');
+    status.textContent = '⚠ ' + (msg || 'Un giocatore ha lasciato la stanza.');
+  }
 });
 
 socket.on('briscola_presa', ({ token, nome, briscola }) => {
@@ -647,17 +856,47 @@ function showEndModal(risultati, vincitore, modalitaSquadre) {
       </div>
     `).join('');
   }
+  rematchRichiesta = false;
+  rematchChiusa    = false;
+  const btn    = document.getElementById('btn-rematch');
+  const status = document.getElementById('rematch-status');
+  btn.disabled      = false;
+  btn.style.display = '';
+  btn.classList.remove('waiting');
+  btn.textContent   = '🔄 Gioca ancora';
+  status.classList.remove('closed');
+  status.textContent = '';
+
   document.getElementById('modal-end').style.display = 'flex';
 }
 
+function chiediNuovaPartita() {
+  if (rematchRichiesta || rematchChiusa) return;
+  rematchRichiesta = true;
+  const btn = document.getElementById('btn-rematch');
+  btn.disabled = true;
+  btn.classList.add('waiting');
+  btn.textContent = '✓ Pronto! In attesa…';
+  socket.emit('nuova_partita', {});
+}
+
 function tornaLobby() {
+  socket.leave();
   clearSession();
+  if (clearTrickTimer) {
+    clearTimeout(clearTrickTimer);
+    clearTrickTimer = null;
+  }
   document.getElementById('modal-end').style.display  = 'none';
   document.getElementById('game-page').style.display  = 'none';
   document.getElementById('lobby').style.display      = 'flex';
+  document.getElementById('room-input').value         = '';
+  setErr('err-join', '');
+  setErr('err-create', '');
   gameState = null; myMano = []; punteggi = {}; mioTurno = false;
   myToken = ''; myRoomId = '';
   squadre = null; compagnoToken = null; compagnoNome = null;
+  rematchRichiesta = false; rematchChiusa = false;
   goLobbyScreen('screen-home');
 }
 

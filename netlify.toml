@@ -1,0 +1,6 @@
+[build]
+  publish = "public"
+  functions = "netlify/functions"
+
+# Nessun comando di build: public/ è già pronto.
+# /api/* è gestito dalla function (vedi `config.path` in netlify/functions/api.mjs).

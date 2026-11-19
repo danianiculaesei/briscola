@@ -4,3 +4,7 @@ npm-debug.log*
 .DS_Store
 *.log
 .claude/
+
+# Local Netlify folder
+.netlify
+deno.lock
